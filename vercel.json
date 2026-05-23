@@ -16,3 +16,17 @@
     "PYTHONUNBUFFERED": "1"
   }
 }
+
+
+{
+    "experimentalServices": {
+        "frontend": {
+            "root": "frontend",
+            "routePrefix": "/"
+        },
+        "backend": {
+            "root": "backend",
+            "routePrefix": "/_/backend"
+        }
+    }
+}
