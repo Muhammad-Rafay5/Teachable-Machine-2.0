@@ -1,0 +1,15 @@
+[client]
+showErrorDetails = true
+
+[logger]
+level = "info"
+
+[server]
+# Allow external connections (required for Vercel backend)
+enableXsrfProtection = true
+maxUploadSize = 200  # MB
+
+# Enable localhost for secure context
+# Uncomment below if you have SSL certificates
+# sslKeyFile = "/path/to/key.pem"
+# sslCertFile = "/path/to/cert.pem"
