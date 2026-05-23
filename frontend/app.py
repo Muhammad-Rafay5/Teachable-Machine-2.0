@@ -84,6 +84,8 @@ defaults = {
     "local_classes":    [],
     "last_test_hash":   None,
     "last_prediction":  None,
+    "burst_counts":     {},      # tracks burst capture progress per class index
+    "burst_frames":     {},      # tracks captured frame hashes to avoid duplicates
 }
 for key, value in defaults.items():
     if key not in st.session_state:
@@ -225,6 +227,8 @@ with st.sidebar:
             st.session_state.local_classes    = ["Class 1", "Class 2"]
             st.session_state.last_test_hash   = None
             st.session_state.last_prediction  = None
+            st.session_state.burst_counts     = {}
+            st.session_state.burst_frames     = {}
             st.success("Wiped all datasets & models!")
             st.rerun()
 
@@ -335,6 +339,12 @@ with col_classes:
                                 timeout=30,
                             )
                         if status == 200:
+                            # Sync local class name with backend's sanitized name
+                            backend_name = data.get("class_name", cls_name)
+                            if backend_name != cls_name:
+                                st.session_state.local_classes[idx] = backend_name
+                                if cls_name in st.session_state.counts:
+                                    st.session_state.counts[backend_name] = st.session_state.counts.pop(cls_name)
                             st.toast("Images uploaded successfully!", icon="✅")
                             refresh_classes()
                             st.rerun()
@@ -342,22 +352,88 @@ with col_classes:
                             st.error(data.get("detail", "Upload failed."))
                             
             elif st.session_state[mode_key] == "Webcam":
-                cam_frame = st.camera_input(f"Capture snapshot for {cls_name}", key=f"cam_{idx}", label_visibility="collapsed")
-                if cam_frame:
-                    if st.button("Add Snapshot to Class", key=f"save_cam_{idx}", type="primary", use_container_width=True):
-                        with st.spinner("Uploading snapshot..."):
-                            data, status = call_api(
-                                "POST", "/upload-sample",
-                                data={"class_name": cls_name},
-                                files=[("files", ("webcam.jpg", io.BytesIO(cam_frame.getvalue()), "image/jpeg"))],
-                                timeout=15,
-                            )
-                        if status == 200:
-                            st.toast("Snapshot added!", icon="📸")
-                            refresh_classes()
-                            st.rerun()
-                        elif data:
-                            st.error(data.get("detail", "Upload failed."))
+                # ── 4-Photo Burst Capture Flow ────────────────────────────
+                burst_key = f"burst_{idx}"
+                burst_hash_key = f"burst_hash_{idx}"
+                if burst_key not in st.session_state.burst_counts:
+                    st.session_state.burst_counts[burst_key] = 0
+                if burst_hash_key not in st.session_state.burst_frames:
+                    st.session_state.burst_frames[burst_hash_key] = None
+
+                current_burst = st.session_state.burst_counts[burst_key]
+                total_burst = 4
+
+                if current_burst < total_burst:
+                    # Show progress indicator
+                    remaining = total_burst - current_burst
+                    if current_burst > 0:
+                        st.markdown(
+                            f'<div style="background-color:rgba(59, 130, 246, 0.1); border:1px solid #3B82F6; '
+                            f'padding:10px; border-radius:8px; margin-bottom:10px; text-align:center;">'
+                            f'<strong style="color:#1E3A8A;">📸 Photo {current_burst}/{total_burst} captured</strong><br/>'
+                            f'<span style="font-size:12px; color:#1E3A8A;">Take {remaining} more photo(s) to complete the burst.</span></div>',
+                            unsafe_allow_html=True
+                        )
+                        st.progress(current_burst / total_burst)
+                    else:
+                        st.markdown(
+                            f'<div style="background-color:rgba(107, 114, 128, 0.1); border:1px solid #9CA3AF; '
+                            f'padding:10px; border-radius:8px; margin-bottom:10px; text-align:center;">'
+                            f'<strong style="color:#374151;">📷 Burst Capture Mode</strong><br/>'
+                            f'<span style="font-size:12px; color:#6B7280;">Take 4 photos — each will be auto-uploaded.</span></div>',
+                            unsafe_allow_html=True
+                        )
+
+                    cam_frame = st.camera_input(
+                        f"Capture photo {current_burst + 1} of {total_burst} for {cls_name}",
+                        key=f"cam_{idx}",
+                        label_visibility="collapsed"
+                    )
+
+                    if cam_frame:
+                        # Check if this is a new frame (not the same one from last rerun)
+                        frame_hash = hash(cam_frame.getvalue())
+                        if frame_hash != st.session_state.burst_frames[burst_hash_key]:
+                            st.session_state.burst_frames[burst_hash_key] = frame_hash
+                            # Auto-upload this frame immediately
+                            with st.spinner(f"Uploading photo {current_burst + 1}/{total_burst}..."):
+                                data, status = call_api(
+                                    "POST", "/upload-sample",
+                                    data={"class_name": cls_name},
+                                    files=[("files", (f"webcam_{current_burst+1}.jpg", io.BytesIO(cam_frame.getvalue()), "image/jpeg"))],
+                                    timeout=15,
+                                )
+                            if status == 200:
+                                # Sync local class name with backend's sanitized name
+                                backend_name = data.get("class_name", cls_name)
+                                if backend_name != cls_name:
+                                    st.session_state.local_classes[idx] = backend_name
+                                    if cls_name in st.session_state.counts:
+                                        st.session_state.counts[backend_name] = st.session_state.counts.pop(cls_name)
+                                st.session_state.burst_counts[burst_key] = current_burst + 1
+                                st.toast(f"📸 Photo {current_burst + 1}/{total_burst} captured!", icon="✅")
+                                # Clear the camera widget so user can take next photo
+                                if f"cam_{idx}" in st.session_state:
+                                    del st.session_state[f"cam_{idx}"]
+                                refresh_classes()
+                                st.rerun()
+                            elif data:
+                                st.error(data.get("detail", "Upload failed."))
+                else:
+                    # All 4 photos captured — show success
+                    st.markdown(
+                        f'<div style="background-color:rgba(16, 185, 129, 0.12); border:1px solid #10B981; '
+                        f'padding:12px; border-radius:8px; text-align:center; margin-bottom:10px;">'
+                        f'<strong style="color:#065F46;">✅ All {total_burst} photos captured!</strong></div>',
+                        unsafe_allow_html=True
+                    )
+                    st.progress(1.0)
+                    if st.button("🔄 Take 4 More Photos", key=f"reset_burst_{idx}", use_container_width=True):
+                        st.session_state.burst_counts[burst_key] = 0
+                        st.session_state.burst_frames[burst_hash_key] = None
+                        if f"cam_{idx}" in st.session_state:
+                            del st.session_state[f"cam_{idx}"]
+                        st.rerun()
 
     # ➕ Add dynamic class button
     if st.button("➕ Add a class", use_container_width=True):
